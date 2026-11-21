@@ -1,0 +1,11 @@
+{
+  "name": "Cartomantes 24h",
+  "description": "Plataforma celestial de cartomancia 24h, tarot interativo, lives ao vivo, consultas com agendamento, comunidade espiritual, match astrológico e painel administrativo em tempo real.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
