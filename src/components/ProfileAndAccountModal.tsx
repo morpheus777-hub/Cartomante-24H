@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BellRing, Check, LogOut, Radio, Save, Upload, X } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { SPIRITUAL_INTERESTS, ZODIAC_SIGNS } from '../data/zodiac';
-import type { PublicUser } from '../types';
+import type { PublicUser, UploadedAsset } from '../types';
 
 const PRESET_AVATARS = [
   '/src/assets/images/reader_selena_luna_1795241298228.jpg',
@@ -131,20 +131,41 @@ export function ProfileAndAccountModal({ onOpenAdmin }: { onOpenAdmin: () => voi
     );
   };
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 260_000) {
-      notifyToast('Imagem muito grande', 'Escolha uma foto de até 250 KB.', 'error');
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      notifyToast('Formato não suportado', 'Escolha uma foto PNG, JPG ou WEBP.', 'error');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setAvatar(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    if (file.size > 2_000_000) {
+      notifyToast('Imagem muito grande', 'Escolha uma foto de até 2 MB.', 'error');
+      return;
+    }
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          typeof reader.result === 'string'
+            ? resolve(reader.result)
+            : reject(new Error('Falha ao ler arquivo.'));
+        reader.onerror = () => reject(new Error('Falha ao ler arquivo.'));
+        reader.readAsDataURL(file);
+      });
+      const res = await apiFetch<{ asset: UploadedAsset }>('/api/uploads', {
+        method: 'POST',
+        body: JSON.stringify({ dataUrl, originalName: file.name }),
+      });
+      setAvatar(res.asset.url);
+      notifyToast('Foto enviada', 'Clique em Salvar Perfil para aplicar no seu cartão.', 'success');
+    } catch (err) {
+      notifyToast('Erro no envio', err instanceof Error ? err.message : 'Tente novamente.', 'error');
+    } finally {
+      setUploadingPhoto(false);
+    }
   };
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -240,8 +261,8 @@ export function ProfileAndAccountModal({ onOpenAdmin }: { onOpenAdmin: () => voi
               <div className="flex flex-wrap items-center gap-2">
                 <label className="px-3 py-1.5 rounded-lg bg-[#F3EEF9] hover:bg-[#E7DDF7] text-[#4C1D95] text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer">
                   <Upload className="w-3.5 h-3.5" />
-                  <span>Enviar Foto</span>
-                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handlePhotoUpload} className="hidden" />
+                  <span>{uploadingPhoto ? 'Enviando...' : 'Enviar Foto'}</span>
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handlePhotoUpload} disabled={uploadingPhoto} className="hidden" />
                 </label>
                 {PRESET_AVATARS.map((imgUrl, idx) => (
                   <button
@@ -256,7 +277,7 @@ export function ProfileAndAccountModal({ onOpenAdmin }: { onOpenAdmin: () => voi
                   </button>
                 ))}
               </div>
-              <p className="text-[11px] text-[#6B5B8E]">Escolha um retrato celestial ou envie sua própria foto (até 250 KB).</p>
+              <p className="text-[11px] text-[#6B5B8E]">Escolha um retrato celestial ou envie sua própria foto (PNG, JPG ou WEBP até 2 MB).</p>
             </div>
           </div>
 

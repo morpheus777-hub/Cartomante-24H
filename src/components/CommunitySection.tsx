@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Heart, MessageSquare, Send, Sparkles, Trash2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { ZODIAC_SIGNS } from '../data/zodiac';
+import { UploaderWidget } from './UploaderWidget';
 
 export function CommunitySection() {
   const { user, communityPosts, setActiveModal, notifyToast, apiFetch } = useApp();
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [imageUrl, setImageUrl] = useState('');
   const [category, setCategory] = useState('Experiência de Leitura');
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [posting, setPosting] = useState(false);
@@ -23,10 +25,11 @@ export function CommunitySection() {
     try {
       await apiFetch('/api/community/posts', {
         method: 'POST',
-        body: JSON.stringify({ title, content, category }),
+        body: JSON.stringify({ title, content, category, ...(imageUrl ? { imageUrl } : {}) }),
       });
       setTitle('');
       setContent('');
+      setImageUrl('');
       notifyToast('Publicado na comunidade', 'Sua reflexão celestial já está visível para os membros.', 'success');
     } catch (err) {
       notifyToast('Erro ao publicar', err instanceof Error ? err.message : 'Tente novamente.', 'error');
@@ -152,6 +155,15 @@ export function CommunitySection() {
                 />
               </div>
 
+              <UploaderWidget
+                compact
+                label="Anexar Foto ou Tiragem (Opcional)"
+                helperText="Envie foto das cartas ou ritual (PNG, JPG ou WEBP até 2 MB)."
+                value={imageUrl}
+                onUploaded={(asset) => setImageUrl(asset.url)}
+                onClear={() => setImageUrl('')}
+              />
+
               <button
                 type="submit"
                 disabled={posting}
@@ -204,6 +216,16 @@ export function CommunitySection() {
                   <div>
                     <h4 className="font-display text-2xl font-semibold text-[#2E1A47]">{post.title}</h4>
                     <p className="text-sm text-[#4B3A6B] mt-2 leading-relaxed whitespace-pre-line">{post.content}</p>
+                    {post.imageUrl && (
+                      <div className="mt-4 rounded-xl overflow-hidden border border-[#E6DDF5] bg-[#F9F7FD]">
+                        <img
+                          src={post.imageUrl}
+                          alt={`Imagem da publicação: ${post.title}`}
+                          referrerPolicy="no-referrer"
+                          className="w-full max-h-96 object-cover"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="pt-3 border-t border-[#F1EAFD] flex items-center gap-6 text-xs font-semibold text-[#5E4E80]">

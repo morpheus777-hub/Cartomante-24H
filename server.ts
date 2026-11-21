@@ -13,6 +13,7 @@ import {
   hashPassword,
   isValidAudioDataUrl,
   isValidAvatarUrl,
+  isValidImagePathOrUrl,
   isValidWhatsAppUrl,
   toPublicUser,
   verifyPassword,
@@ -27,6 +28,7 @@ import type {
   OnlineSession,
   PublicUser,
   ReadingHistoryItem,
+  UploadedAsset,
 } from './src/types.ts';
 import { calculateAstrologicalCompatibility } from './src/data/zodiac.ts';
 
@@ -191,9 +193,49 @@ function canAccessRoom(user: StoredUser, roomId: string): boolean {
   return false;
 }
 
+const UPLOADS_DIR = path.resolve(process.cwd(), 'data', 'uploads');
+
+function detectImageFormatFromMagicBytes(
+  buf: Buffer
+): { ext: 'png' | 'jpg' | 'webp'; mimeType: string } | null {
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return { ext: 'png', mimeType: 'image/png' };
+  }
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return { ext: 'jpg', mimeType: 'image/jpeg' };
+  }
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buf.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return { ext: 'webp', mimeType: 'image/webp' };
+  }
+  return null;
+}
+
 async function startServer() {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
   const app = express();
-  app.use(express.json({ limit: '3mb' }));
+  app.use(express.json({ limit: '4mb' }));
+  app.use(
+    '/uploads',
+    (_req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      next();
+    },
+    express.static(UPLOADS_DIR)
+  );
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -827,6 +869,7 @@ async function startServer() {
 
     const text = sanitizeText(req.body?.text, 800);
     const rawAudio = typeof req.body?.audioDataUrl === 'string' ? req.body.audioDataUrl.trim() : '';
+    const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
     const audioDurationSec =
       typeof req.body?.audioDurationSec === 'number' && Number.isFinite(req.body.audioDurationSec)
         ? Math.max(1, Math.min(300, Math.round(req.body.audioDurationSec)))
@@ -840,8 +883,13 @@ async function startServer() {
       return;
     }
 
-    if (!text && !rawAudio && (!cardsDrawn || cardsDrawn.length === 0)) {
-      res.status(400).json({ error: 'Digite uma mensagem ou grave um áudio para enviar.' });
+    if (imageUrl && !isValidImagePathOrUrl(imageUrl)) {
+      res.status(400).json({ error: 'Endereço de imagem inválido.' });
+      return;
+    }
+
+    if (!text && !rawAudio && !imageUrl && (!cardsDrawn || cardsDrawn.length === 0)) {
+      res.status(400).json({ error: 'Digite uma mensagem, anexe uma imagem ou grave um áudio para enviar.' });
       return;
     }
 
@@ -851,7 +899,8 @@ async function startServer() {
       senderId: user.id,
       senderName: user.name,
       senderAvatar: user.avatar,
-      text: text || (rawAudio ? 'Mensagem de voz' : ''),
+      text: text || (rawAudio ? 'Mensagem de voz' : imageUrl ? 'Imagem anexada' : ''),
+      ...(imageUrl ? { imageUrl } : {}),
       ...(rawAudio ? { audioDataUrl: rawAudio, audioDurationSec } : {}),
       ...(cardsDrawn ? { cardsDrawn } : {}),
       createdAt: new Date().toISOString(),
@@ -929,9 +978,14 @@ async function startServer() {
     const title = sanitizeText(req.body?.title, 140);
     const content = sanitizeText(req.body?.content, 1200);
     const category = sanitizeText(req.body?.category, 40) || 'Experiência';
+    const imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
 
     if (title.length < 3 || content.length < 6) {
       res.status(400).json({ error: 'Preencha título e conteúdo da publicação.' });
+      return;
+    }
+    if (imageUrl && !isValidImagePathOrUrl(imageUrl)) {
+      res.status(400).json({ error: 'Imagem anexada inválida.' });
       return;
     }
 
@@ -944,6 +998,7 @@ async function startServer() {
       authorSign: user.zodiacSign,
       title,
       content,
+      ...(imageUrl ? { imageUrl } : {}),
       category,
       likes: [],
       comments: [],
@@ -1360,6 +1415,98 @@ async function startServer() {
       return;
     }
     state.users.splice(idx, 1);
+    db.save();
+    res.json({ ok: true });
+  });
+
+  // --- Upador de Imagens e Mídia ---
+  app.get('/api/uploads', requireAuth, (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    const state = db.getState();
+    const canViewAll = user.role === 'admin' || hasPermission(user, 'manage_users');
+    const assets = canViewAll ? state.uploads : state.uploads.filter((a) => a.userId === user.id);
+    res.json({ uploads: assets });
+  });
+
+  app.post('/api/uploads', requireAuth, (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    const dataUrl = typeof req.body?.dataUrl === 'string' ? req.body.dataUrl.trim() : '';
+    const originalName = sanitizeText(req.body?.originalName, 120) || 'imagem';
+
+    const match = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!match) {
+      res.status(400).json({ error: 'Envie uma imagem válida em formato PNG, JPG ou WEBP.' });
+      return;
+    }
+
+    const declaredFormat = match[1] === 'jpeg' ? 'jpg' : match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length === 0 || buffer.length > 2_000_000) {
+      res.status(400).json({ error: 'A imagem deve ter no máximo 2 MB.' });
+      return;
+    }
+
+    const detected = detectImageFormatFromMagicBytes(buffer);
+    if (!detected || detected.ext !== declaredFormat) {
+      res.status(400).json({ error: 'Assinatura de arquivo inválida. Use PNG, JPG ou WEBP legítimos.' });
+      return;
+    }
+
+    const filename = `${crypto.randomUUID()}.${detected.ext}`;
+    const resolvedTarget = path.resolve(UPLOADS_DIR, filename);
+    if (!resolvedTarget.startsWith(UPLOADS_DIR + path.sep)) {
+      res.status(400).json({ error: 'Caminho de arquivo inválido.' });
+      return;
+    }
+
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(resolvedTarget, buffer);
+
+    const asset: UploadedAsset = {
+      id: `upl-${crypto.randomUUID()}`,
+      userId: user.id,
+      userName: user.name,
+      originalName,
+      mimeType: detected.mimeType,
+      sizeBytes: buffer.length,
+      url: `/uploads/${filename}`,
+      createdAt: new Date().toISOString(),
+    };
+
+    const state = db.getState();
+    state.uploads.unshift(asset);
+    if (state.uploads.length > 500) {
+      state.uploads = state.uploads.slice(0, 500);
+    }
+    db.save();
+
+    res.status(201).json({ asset });
+  });
+
+  app.delete('/api/uploads/:id', requireAuth, (req: AuthedRequest, res) => {
+    const user = req.currentUser!;
+    const state = db.getState();
+    const idx = state.uploads.findIndex((a) => a.id === req.params.id);
+    if (idx < 0) {
+      res.status(404).json({ error: 'Arquivo não encontrado.' });
+      return;
+    }
+
+    const asset = state.uploads[idx];
+    const canDelete =
+      asset.userId === user.id || user.role === 'admin' || hasPermission(user, 'manage_users');
+    if (!canDelete) {
+      res.status(403).json({ error: 'Sem permissão para excluir este arquivo.' });
+      return;
+    }
+
+    const basename = path.basename(asset.url);
+    const resolvedTarget = path.resolve(UPLOADS_DIR, basename);
+    if (resolvedTarget.startsWith(UPLOADS_DIR + path.sep) && fs.existsSync(resolvedTarget)) {
+      fs.unlinkSync(resolvedTarget);
+    }
+
+    state.uploads.splice(idx, 1);
     db.save();
     res.json({ ok: true });
   });

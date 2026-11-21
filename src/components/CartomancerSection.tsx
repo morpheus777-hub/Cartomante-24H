@@ -3,6 +3,7 @@ import {
   CalendarClock,
   CheckCircle2,
   CreditCard,
+  ImagePlus,
   MessageCircle,
   Mic,
   MicOff,
@@ -18,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MAJOR_ARCANA } from '../data/tarotDeck';
-import type { ChatMessage, Consultation, ConsultationTier, DrawnCardRecord, PublicUser } from '../types';
+import type { ChatMessage, Consultation, ConsultationTier, DrawnCardRecord, PublicUser, UploadedAsset } from '../types';
 
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
@@ -57,6 +58,8 @@ export function CartomancerSection() {
   const [recordingAudio, setRecordingAudio] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [sendingAudio, setSendingAudio] = useState(false);
+  const [uploadingChatImage, setUploadingChatImage] = useState(false);
+  const chatImageInputRef = useRef<HTMLInputElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -549,6 +552,50 @@ export function CartomancerSection() {
       setConsultMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
     } catch (err) {
       notifyToast('Erro no envio', err instanceof Error ? err.message : 'Falha ao enviar mensagem.', 'error');
+    }
+  };
+
+  const handleUploadConsultImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeConsultation) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      notifyToast('Formato inválido', 'Envie apenas PNG, JPG ou WEBP.', 'error');
+      return;
+    }
+    if (file.size > 2_000_000) {
+      notifyToast('Imagem acima do limite', 'Selecione uma imagem de até 2 MB.', 'error');
+      return;
+    }
+    setUploadingChatImage(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () =>
+          typeof reader.result === 'string'
+            ? resolve(reader.result)
+            : reject(new Error('Falha ao ler imagem.'));
+        reader.onerror = () => reject(new Error('Falha ao ler imagem.'));
+        reader.readAsDataURL(file);
+      });
+      const upl = await apiFetch<{ asset: UploadedAsset }>('/api/uploads', {
+        method: 'POST',
+        body: JSON.stringify({ dataUrl, originalName: file.name }),
+      });
+      const caption = consultDraft.trim();
+      setConsultDraft('');
+      const res = await apiFetch<{ message: ChatMessage }>(`/api/chat/consult:${activeConsultation.id}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          imageUrl: upl.asset.url,
+          ...(caption ? { text: caption } : {}),
+        }),
+      });
+      setConsultMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
+    } catch (err) {
+      notifyToast('Erro ao enviar imagem', err instanceof Error ? err.message : 'Tente novamente.', 'error');
+    } finally {
+      setUploadingChatImage(false);
+      if (chatImageInputRef.current) chatImageInputRef.current.value = '';
     }
   };
 
@@ -1146,6 +1193,16 @@ export function CartomancerSection() {
                       <p className={`text-[11px] font-semibold mb-1 ${isMine ? 'text-white/80' : 'text-[#6D28D9]'}`}>
                         {msg.senderName}
                       </p>
+                      {msg.imageUrl && (
+                        <div className="mb-2 rounded-lg overflow-hidden border border-black/10 bg-black/5">
+                          <img
+                            src={msg.imageUrl}
+                            alt={`Imagem enviada por ${msg.senderName}`}
+                            referrerPolicy="no-referrer"
+                            className="max-w-full max-h-64 object-cover"
+                          />
+                        </div>
+                      )}
                       {msg.audioDataUrl ? (
                         <div className="space-y-1.5">
                           <audio controls src={msg.audioDataUrl} className="max-w-full h-9" />
@@ -1156,7 +1213,7 @@ export function CartomancerSection() {
                           )}
                         </div>
                       ) : (
-                        <p className="leading-relaxed">{msg.text}</p>
+                        msg.text && <p className="leading-relaxed">{msg.text}</p>
                       )}
                     </div>
                   </div>
@@ -1165,6 +1222,13 @@ export function CartomancerSection() {
             </div>
 
             <form onSubmit={handleSendConsultMsg} className="p-4 border-t border-[#EDE7F6] bg-white flex items-center gap-2">
+              <input
+                ref={chatImageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={handleUploadConsultImage}
+                className="hidden"
+              />
               {recordingAudio ? (
                 <div className="flex-1 flex items-center justify-between gap-3 px-3.5 py-2 rounded-lg bg-rose-50 border border-rose-200">
                   <span className="text-xs font-semibold text-rose-800 tabular-nums">
@@ -1201,11 +1265,27 @@ export function CartomancerSection() {
                   >
                     <Mic className="w-4 h-4" />
                   </button>
+                  <button
+                    type="button"
+                    disabled={uploadingChatImage}
+                    onClick={() => chatImageInputRef.current?.click()}
+                    title="Enviar imagem da tiragem"
+                    aria-label="Enviar imagem da tiragem"
+                    className="p-2.5 rounded-lg border border-[#DCD1EF] hover:bg-[#F3EEF9] text-[#6D28D9] cursor-pointer shrink-0"
+                  >
+                    <ImagePlus className="w-4 h-4" />
+                  </button>
                   <input
                     type="text"
                     value={consultDraft}
                     onChange={(e) => setConsultDraft(e.target.value)}
-                    placeholder={sendingAudio ? 'Enviando áudio...' : 'Escreva sua mensagem ou grave um áudio...'}
+                    placeholder={
+                      uploadingChatImage
+                        ? 'Enviando imagem...'
+                        : sendingAudio
+                        ? 'Enviando áudio...'
+                        : 'Escreva, envie foto ou grave um áudio...'
+                    }
                     className="flex-1 px-3.5 py-2.5 rounded-lg border border-[#DCD1EF] text-sm focus:outline-none focus:ring-2 focus:ring-[#6D28D9]/30"
                   />
                   <button

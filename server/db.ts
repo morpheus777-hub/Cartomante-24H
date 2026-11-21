@@ -12,6 +12,7 @@ import type {
   PresenceLog,
   PublicUser,
   ReadingHistoryItem,
+  UploadedAsset,
   UserRole,
 } from '../src/types.ts';
 
@@ -40,6 +41,7 @@ export interface DatabaseState {
   matchActions: MatchActionRecord[];
   matches: AstroMatch[];
   notifications: AppNotification[];
+  uploads: UploadedAsset[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -259,6 +261,7 @@ function createInitialState(): DatabaseState {
     matchActions: [],
     matches: [],
     notifications: [],
+    uploads: [],
   };
 }
 
@@ -283,6 +286,7 @@ class Store {
             Array.isArray(parsed.communityPosts) && parsed.communityPosts.length > 0
               ? parsed.communityPosts
               : initial.communityPosts,
+          uploads: Array.isArray(parsed.uploads) ? parsed.uploads : [],
         };
       }
     } catch (err) {
@@ -390,18 +394,25 @@ export function isValidWhatsAppUrl(url: string): boolean {
   }
 }
 
-export function isValidAvatarUrl(url: string): boolean {
+export function isValidImagePathOrUrl(url: string): boolean {
   if (!url) return false;
   if (url.startsWith('/src/assets/images/')) return true;
-  if (/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(url)) {
-    return url.length <= 400_000;
-  }
+  if (/^\/uploads\/[a-f0-9-]+\.(png|jpg|webp)$/.test(url)) return true;
   try {
     const parsed = new URL(url);
     return parsed.protocol === 'https:';
   } catch {
     return false;
   }
+}
+
+export function isValidAvatarUrl(url: string): boolean {
+  if (!url) return false;
+  if (isValidImagePathOrUrl(url)) return true;
+  if (/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/.test(url)) {
+    return url.length <= 400_000;
+  }
+  return false;
 }
 
 export function isValidAudioDataUrl(url: string): boolean {

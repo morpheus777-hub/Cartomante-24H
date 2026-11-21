@@ -3,7 +3,9 @@ import {
   Activity,
   ArrowLeft,
   Check,
+  Copy,
   DollarSign,
+  Image,
   Plus,
   RefreshCw,
   Shield,
@@ -12,7 +14,8 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import type { AdminPermission, Consultation, OnlineSession, PresenceLog, PublicUser } from '../types';
+import { UploaderWidget } from './UploaderWidget';
+import type { AdminPermission, Consultation, OnlineSession, PresenceLog, PublicUser, UploadedAsset } from '../types';
 
 const PERMISSION_LABELS: Record<AdminPermission, string> = {
   view_online: 'Ver usuários online e entradas/saídas',
@@ -31,6 +34,8 @@ export function AdminDashboard({ onBackToPortal }: { onBackToPortal: () => void 
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [cartomancers, setCartomancers] = useState<PublicUser[]>([]);
   const [subaccounts, setSubaccounts] = useState<PublicUser[]>([]);
+  const [uploads, setUploads] = useState<UploadedAsset[]>([]);
+  const [lastUploadedUrl, setLastUploadedUrl] = useState('');
   const [loading, setLoading] = useState(true);
 
   // Quick edit modal state
@@ -49,20 +54,24 @@ export function AdminDashboard({ onBackToPortal }: { onBackToPortal: () => void 
   const loadOverview = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch<{
-        onlineSessions: OnlineSession[];
-        presenceLogs: PresenceLog[];
-        consultations: Consultation[];
-        totalRevenue: number;
-        cartomancers: PublicUser[];
-        subaccounts: PublicUser[];
-      }>('/api/admin/overview');
+      const [data, uploadsData] = await Promise.all([
+        apiFetch<{
+          onlineSessions: OnlineSession[];
+          presenceLogs: PresenceLog[];
+          consultations: Consultation[];
+          totalRevenue: number;
+          cartomancers: PublicUser[];
+          subaccounts: PublicUser[];
+        }>('/api/admin/overview'),
+        apiFetch<{ uploads: UploadedAsset[] }>('/api/uploads').catch(() => ({ uploads: [] })),
+      ]);
       setOnlineSessions(data.onlineSessions);
       setPresenceLogs(data.presenceLogs);
       setConsultations(data.consultations);
       setTotalRevenue(data.totalRevenue);
       setCartomancers(data.cartomancers);
       setSubaccounts(data.subaccounts);
+      setUploads(uploadsData.uploads);
     } catch (err) {
       notifyToast('Erro no painel', err instanceof Error ? err.message : 'Sem permissão.', 'error');
     } finally {
@@ -144,6 +153,26 @@ export function AdminDashboard({ onBackToPortal }: { onBackToPortal: () => void 
 
   const toggleSubPerm = (perm: AdminPermission) => {
     setSubPerms((prev) => (prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm]));
+  };
+
+  const handleDeleteUpload = async (id: string) => {
+    try {
+      await apiFetch(`/api/uploads/${id}`, { method: 'DELETE' });
+      setUploads((prev) => prev.filter((u) => u.id !== id));
+      notifyToast('Arquivo excluído do Upador', undefined, 'info');
+    } catch (err) {
+      notifyToast('Erro ao excluir', err instanceof Error ? err.message : 'Sem permissão.', 'error');
+    }
+  };
+
+  const handleCopyAssetLink = async (url: string) => {
+    const full = url.startsWith('http') ? url : `${window.location.origin}${url}`;
+    try {
+      await navigator.clipboard.writeText(full);
+      notifyToast('Link copiado', 'URL pronta para uso no portal.', 'success');
+    } catch {
+      notifyToast('Falha ao copiar', 'Copie manualmente o endereço.', 'error');
+    }
   };
 
   return (
@@ -486,6 +515,88 @@ export function AdminDashboard({ onBackToPortal }: { onBackToPortal: () => void 
             </div>
           </div>
         )}
+
+        {/* Upador de Mídia & Galeria */}
+        <div className="p-6 rounded-2xl bg-white border border-[#E6DDF5] space-y-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-display text-2xl font-semibold text-[#2E1A47]">
+                Upador de Imagens & Galeria de Mídia
+              </h2>
+              <p className="text-xs text-[#6B5B8E]">
+                Envie artes, fotos de cartas e banners para gerar links diretos no portal ({uploads.length} arquivos).
+              </p>
+            </div>
+            <Image className="w-5 h-5 text-[#6D28D9]" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-4">
+              <UploaderWidget
+                label="Novo Envio no Upador"
+                helperText="PNG, JPG ou WEBP de até 2 MB."
+                value={lastUploadedUrl}
+                onUploaded={(asset) => {
+                  setLastUploadedUrl(asset.url);
+                  setUploads((prev) => [asset, ...prev]);
+                }}
+                onClear={() => setLastUploadedUrl('')}
+              />
+            </div>
+
+            <div className="lg:col-span-8">
+              {uploads.length === 0 ? (
+                <div className="p-6 rounded-xl bg-[#F9F7FD] border border-[#EDE7F6] text-xs text-[#6B5B8E] text-center">
+                  Nenhuma imagem enviada ainda pelo Upador.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-96 overflow-y-auto pr-1">
+                  {uploads.map((asset) => (
+                    <div
+                      key={asset.id}
+                      className="rounded-xl border border-[#E6DDF5] bg-[#F9F7FD] overflow-hidden flex flex-col justify-between"
+                    >
+                      <div className="h-32 bg-[#EFE8FB] overflow-hidden">
+                        <img
+                          src={asset.url}
+                          alt={asset.originalName}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="p-3 space-y-2">
+                        <div>
+                          <p className="text-xs font-semibold text-[#2E1A47] truncate">{asset.originalName}</p>
+                          <p className="text-[11px] text-[#6B5B8E] truncate tabular-nums">
+                            {asset.userName} · {Math.max(1, Math.round(asset.sizeBytes / 1024))} KB
+                          </p>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#EDE7F6]">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyAssetLink(asset.url)}
+                            className="px-2.5 py-1 rounded bg-white border border-[#DCD1EF] hover:bg-[#F3EEF9] text-[#4C1D95] text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Copy className="w-3 h-3" />
+                            <span>Copiar Link</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteUpload(asset.id)}
+                            aria-label="Excluir arquivo"
+                            className="p-1.5 rounded text-[#7C6B9E] hover:text-rose-700 hover:bg-rose-50 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Quick Edit Cartomancer Modal */}

@@ -88,6 +88,7 @@ export interface ChatMessage {
   senderName: string;
   senderAvatar: string;
   text: string;
+  imageUrl?: string;
   audioDataUrl?: string;
   audioDurationSec?: number;
   cardsDrawn?: DrawnCardRecord[];
@@ -123,6 +124,7 @@ export interface CommunityPost {
   authorSign: string;
   title: string;
   content: string;
+  imageUrl?: string;
   category: string;
   likes: string[];
   comments: CommunityComment[];
@@ -153,5 +155,16 @@ export interface AppNotification {
   title: string;
   body: string;
   read: boolean;
+  createdAt: string;
+}
+
+export interface UploadedAsset {
+  id: string;
+  userId: string;
+  userName: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
   createdAt: string;
 }
